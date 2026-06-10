@@ -5,8 +5,18 @@ use clap_complete::Shell;
 
 use crate::cli::Cli;
 
+/// LLM-optimized usage guide, embedded at compile time so `--usage-llm`
+/// works from the installed binary without the source tree present.
+const USAGE_LLM: &str = include_str!("../usage.llm.md");
+
 fn main() {
     let cli = Cli::parse();
+
+    // Dump the LLM usage guide and exit before any other handling.
+    if cli.usage_llm {
+        print!("{USAGE_LLM}");
+        return;
+    }
 
     let (sources, destination) = cli.extract_args();
 

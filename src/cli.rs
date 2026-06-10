@@ -50,6 +50,10 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "@")]
     pub alias_prefix: String,
 
+    /// Print the LLM-optimized usage guide and exit
+    #[arg(long = "usage-llm")]
+    pub usage_llm: bool,
+
     /// Source file(s) followed by destination (last argument is destination)
     #[arg(required = false, num_args = 2..)]
     pub args: Vec<String>,
