@@ -55,7 +55,7 @@ pub struct Cli {
     pub usage_llm: bool,
 
     /// Source file(s) followed by destination (last argument is destination)
-    #[arg(required = false, num_args = 2..)]
+    #[arg(required = false, num_args = 2.., value_hint = clap::ValueHint::AnyPath)]
     pub args: Vec<String>,
 }
 
@@ -64,14 +64,14 @@ pub enum Commands {
     /// Move TypeScript files/folders and update imports
     Move {
         /// Source file(s) followed by destination (last argument is destination)
-        #[arg(required = true, num_args = 2..)]
+        #[arg(required = true, num_args = 2.., value_hint = clap::ValueHint::AnyPath)]
         args: Vec<String>,
     },
     /// Generate shell completions
     GenerateCompletions {
         /// Shell to generate completions for
         #[arg(value_name = "SHELL")]
-        shell: String,
+        shell: clap_complete::Shell,
     },
     /// Update tsmv to the latest published release
     #[command(visible_alias = "update")]

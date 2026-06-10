@@ -2,7 +2,6 @@ pub mod cli;
 mod self_manage;
 
 use clap::Parser;
-use clap_complete::Shell;
 
 use crate::cli::{Cli, Commands};
 
@@ -24,22 +23,7 @@ fn main() {
         Some(Commands::GenerateCompletions { shell }) => {
             let mut cmd = <Cli as clap::CommandFactory>::command();
             let name = cmd.get_name().to_string();
-            clap_complete::generate(
-                match shell.as_str() {
-                    "bash" => Shell::Bash,
-                    "zsh" => Shell::Zsh,
-                    "fish" => Shell::Fish,
-                    "elvish" => Shell::Elvish,
-                    "powershell" => Shell::PowerShell,
-                    _ => {
-                        eprintln!("Unsupported shell: {shell}");
-                        std::process::exit(1);
-                    }
-                },
-                &mut cmd,
-                &name,
-                &mut std::io::stdout(),
-            );
+            clap_complete::generate(*shell, &mut cmd, &name, &mut std::io::stdout());
             return;
         }
         Some(Commands::SelfUpdate { force }) => {
