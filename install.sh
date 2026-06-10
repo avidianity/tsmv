@@ -57,6 +57,9 @@ if [ -z "$version" ]; then
 fi
 
 asset="${BIN}-${target}.tar.gz"
+# The release publishes the checksum as <bin>-<target>.sha256 (extension
+# replaced, not appended), and its contents reference the .tar.gz archive.
+checksum="${BIN}-${target}.sha256"
 base_url="https://github.com/$REPO/releases/download/$version"
 
 info "Installing $BIN $version ($target)"
@@ -67,14 +70,14 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 
 dl_to "$base_url/$asset" "$tmp/$asset" || err "download failed: $base_url/$asset"
 
-if dl_to "$base_url/$asset.sha256" "$tmp/$asset.sha256" 2>/dev/null; then
+if dl_to "$base_url/$checksum" "$tmp/$checksum" 2>/dev/null; then
   (
     cd "$tmp"
     if command -v sha256sum >/dev/null 2>&1; then
-      sha256sum -c "$asset.sha256" >/dev/null 2>&1 || err "checksum verification failed"
+      sha256sum -c "$checksum" >/dev/null 2>&1 || err "checksum verification failed"
       info "Checksum OK"
     elif command -v shasum >/dev/null 2>&1; then
-      shasum -a 256 -c "$asset.sha256" >/dev/null 2>&1 || err "checksum verification failed"
+      shasum -a 256 -c "$checksum" >/dev/null 2>&1 || err "checksum verification failed"
       info "Checksum OK"
     else
       info "warning: no sha256 tool found; skipping checksum verification"
