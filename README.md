@@ -58,6 +58,13 @@ Prefer to do it by hand? Download the archive for your platform from the
 [Releases](https://github.com/avidianity/tsmv/releases) page (Linux, macOS, and
 Windows, with SHA-256 checksums), unpack it, and put `tsmv` on your `PATH`.
 
+### Updating & uninstalling
+
+```bash
+tsmv self-update       # replace the running binary with the latest release
+tsmv self-uninstall    # remove the installed binary (asks first; -y to skip)
+```
+
 ---
 
 ## Quick start

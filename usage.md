@@ -18,6 +18,8 @@ string literal for a real import.
 tsmv [OPTIONS] <SOURCE>... <DEST>
 tsmv move [OPTIONS] <SOURCE>... <DEST>
 tsmv generate-completions <SHELL>
+tsmv self-update [--force]
+tsmv self-uninstall [--yes]
 tsmv --usage-llm
 tsmv --help
 tsmv --version
@@ -35,6 +37,8 @@ is treated as a **source**. You need at least one source and one destination.
 | *(default)* | Move sources to destination. `tsmv a.ts b.ts dir/` is shorthand for `tsmv move ...`. |
 | `move` | Explicit move subcommand. Identical behaviour to the default form. |
 | `generate-completions <SHELL>` | Print a shell completion script to stdout. `SHELL` is one of `bash`, `zsh`, `fish`, `elvish`, `powershell`. |
+| `self-update` (alias `update`) | Download the latest release and replace the running binary in place. `--force` reinstalls even if already current. (Linux/macOS.) |
+| `self-uninstall` (alias `uninstall`) | Remove the installed `tsmv` binary. Prompts for confirmation; pass `-y`/`--yes` to skip it. (Linux/macOS.) |
 
 ---
 

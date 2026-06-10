@@ -14,6 +14,8 @@ commands from the rules below over guessing.
 tsmv [OPTIONS] <SOURCE>... <DEST>          # default form
 tsmv move [OPTIONS] <SOURCE>... <DEST>     # explicit subcommand, identical
 tsmv generate-completions <SHELL>          # SHELL ∈ {bash,zsh,fish,elvish,powershell}
+tsmv self-update [--force]                 # alias: update — replace binary with latest release (Linux/macOS)
+tsmv self-uninstall [-y|--yes]             # alias: uninstall — delete the installed binary (Linux/macOS)
 tsmv --usage-llm                           # print THIS document, exit 0
 tsmv --help | tsmv --version
 ```
