@@ -1,9 +1,10 @@
 pub mod cli;
+mod self_manage;
 
 use clap::Parser;
 use clap_complete::Shell;
 
-use crate::cli::Cli;
+use crate::cli::{Cli, Commands};
 
 /// LLM-optimized usage guide, embedded at compile time so `--usage-llm`
 /// works from the installed binary without the source tree present.
@@ -18,30 +19,39 @@ fn main() {
         return;
     }
 
-    let (sources, destination) = cli.extract_args();
-
-    // Check for generate-completions subcommand first
-    if let Some(crate::cli::Commands::GenerateCompletions { shell }) = &cli.command {
-        let mut cmd = <Cli as clap::CommandFactory>::command();
-        let name = cmd.get_name().to_string();
-        clap_complete::generate(
-            match shell.as_str() {
-                "bash" => Shell::Bash,
-                "zsh" => Shell::Zsh,
-                "fish" => Shell::Fish,
-                "elvish" => Shell::Elvish,
-                "powershell" => Shell::PowerShell,
-                _ => {
-                    eprintln!("Unsupported shell: {shell}");
-                    std::process::exit(1);
-                }
-            },
-            &mut cmd,
-            &name,
-            &mut std::io::stdout(),
-        );
-        return;
+    // Handle action subcommands before the move path.
+    match &cli.command {
+        Some(Commands::GenerateCompletions { shell }) => {
+            let mut cmd = <Cli as clap::CommandFactory>::command();
+            let name = cmd.get_name().to_string();
+            clap_complete::generate(
+                match shell.as_str() {
+                    "bash" => Shell::Bash,
+                    "zsh" => Shell::Zsh,
+                    "fish" => Shell::Fish,
+                    "elvish" => Shell::Elvish,
+                    "powershell" => Shell::PowerShell,
+                    _ => {
+                        eprintln!("Unsupported shell: {shell}");
+                        std::process::exit(1);
+                    }
+                },
+                &mut cmd,
+                &name,
+                &mut std::io::stdout(),
+            );
+            return;
+        }
+        Some(Commands::SelfUpdate { force }) => {
+            std::process::exit(self_manage::self_update(*force));
+        }
+        Some(Commands::SelfUninstall { yes }) => {
+            std::process::exit(self_manage::self_uninstall(*yes));
+        }
+        _ => {}
     }
+
+    let (sources, destination) = cli.extract_args();
 
     if sources.is_empty() || destination.is_empty() {
         eprintln!("Error: Please specify one or more source paths and a destination.");

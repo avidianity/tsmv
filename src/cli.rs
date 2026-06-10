@@ -73,6 +73,20 @@ pub enum Commands {
         #[arg(value_name = "SHELL")]
         shell: String,
     },
+    /// Update tsmv to the latest published release
+    #[command(visible_alias = "update")]
+    SelfUpdate {
+        /// Reinstall even if already on the latest version
+        #[arg(long)]
+        force: bool,
+    },
+    /// Remove the installed tsmv binary
+    #[command(visible_alias = "uninstall")]
+    SelfUninstall {
+        /// Do not prompt for confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 impl Cli {
@@ -97,7 +111,9 @@ impl Cli {
                 let (sources, dest) = args.split_at(args.len() - 1);
                 (sources, dest[0].as_str())
             }
-            Some(Commands::GenerateCompletions { .. }) => {
+            Some(Commands::GenerateCompletions { .. })
+            | Some(Commands::SelfUpdate { .. })
+            | Some(Commands::SelfUninstall { .. }) => {
                 // Handled in main.rs before this call
                 (&[], "")
             }
