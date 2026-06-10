@@ -153,7 +153,7 @@ where
     }
 
     // Apply from the end so earlier byte offsets stay valid.
-    edits.sort_by(|a, b| b.0.cmp(&a.0));
+    edits.sort_by_key(|e| std::cmp::Reverse(e.0));
     let mut result = content.to_string();
     for (start, end, new_spec) in edits {
         result.replace_range(start..end, &new_spec);
