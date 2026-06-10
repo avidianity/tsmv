@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::core::import_path::{calculate_relative_path, normalize_path};
-use crate::core::import_regex::rewrite_imports;
+use crate::core::import_ast::rewrite_imports;
 
-/// Configuration for the regex-based import updater.
-pub struct RegexUpdaterConfig {
+/// Configuration for the AST-based import updater.
+pub struct ImportUpdaterConfig {
     pub verbose: bool,
 }
 
@@ -14,7 +14,7 @@ pub struct RegexUpdaterConfig {
 pub fn update_imports_in_project(
     moved_files: &HashMap<PathBuf, PathBuf>, // old -> new
     project_root: &Path,
-    config: &RegexUpdaterConfig,
+    config: &ImportUpdaterConfig,
 ) -> usize {
     if config.verbose {
         eprintln!("Starting simple import updates...");
@@ -64,7 +64,7 @@ pub fn update_imports_in_project(
 fn update_imports_in_file(
     file_path: &Path,
     moved_files: &HashMap<PathBuf, PathBuf>,
-    config: &RegexUpdaterConfig,
+    config: &ImportUpdaterConfig,
 ) -> anyhow::Result<bool> {
     let original_content = std::fs::read_to_string(file_path)?;
     let file_dir = file_path.parent().unwrap_or(Path::new("."));
@@ -100,7 +100,7 @@ fn recalculate_own_imports(
     old_path: &Path,
     new_path: &Path,
     moved_files: &HashMap<PathBuf, PathBuf>,
-    config: &RegexUpdaterConfig,
+    config: &ImportUpdaterConfig,
 ) -> anyhow::Result<bool> {
     if !new_path.exists() {
         return Ok(false);

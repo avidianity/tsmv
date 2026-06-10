@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::core::import_path::resolve_import_target;
-use crate::core::import_regex::collect_import_specifiers;
+use crate::core::import_ast::collect_import_specifiers;
 
 /// Detect circular dependencies among a set of moved files.
 /// Returns the first cycle found (as display names), or None.

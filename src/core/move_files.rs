@@ -11,7 +11,7 @@ use crate::core::file_operations::{
     cleanup_empty_directories, execute_file_operations, find_source_directories,
     plan_file_operations, FileOperation,
 };
-use crate::core::regex_updater::{update_imports_in_project, RegexUpdaterConfig};
+use crate::core::import_updater::{update_imports_in_project, ImportUpdaterConfig};
 use crate::core::tsconfig::{find_tsconfig_for_files, parse_tsconfig};
 use crate::options::MoveOptions;
 
@@ -142,7 +142,7 @@ pub fn move_files(
         updated_imports = update_imports_in_project(
             &move_mapping,
             &project_root,
-            &RegexUpdaterConfig {
+            &ImportUpdaterConfig {
                 verbose: options.verbose,
             },
         );

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::core::import_path::normalize_path;
-use crate::core::import_regex::rewrite_imports;
+use crate::core::import_ast::rewrite_imports;
 use crate::core::tsconfig::ResolvedTsConfig;
 
 /// Configuration extracted from tsconfig.json path aliases.

@@ -25,21 +25,13 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir = "2"
-regex = "1"
 pathdiff = "0.2"
-
-# swc for AST-based import updates (Phase 3+)
-# swc_core = { version = "0.10", features = [
-#     "swc_ecma_parser",
-#     "swc_ecma_ast",
-#     "swc_ecma_visit",
-#     "common",
-# ], optional = true }
+# AST-based import parsing/rewriting (replaces the old regex matcher).
+tree-sitter = "0.24.7"
+tree-sitter-typescript = "0.23.2"
 
 [features]
 default = []
-# Enable swc-based AST import updater (Phase 3+) — requires swc_core dependency
-# swc = ["swc_core"]
 
 [dev-dependencies]
 tempfile = "3"
