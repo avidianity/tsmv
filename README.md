@@ -4,11 +4,6 @@
 
 **Safely move TypeScript files and folders — and keep your imports working.**
 
-`tsmv` moves or renames `.ts`/`.tsx` files (and `.js`/`.jsx`) and automatically
-rewrites the imports across your project so nothing breaks. It's a fast,
-single-binary Rust port of
-[`ts-import-move`](https://github.com/drumnation/ts-import-move).
-
 ```bash
 tsmv src/Button.tsx src/components/
 ```
