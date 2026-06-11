@@ -7,6 +7,8 @@ use crate::core::import_ast::rewrite_imports;
 /// Configuration for the AST-based import updater.
 pub struct ImportUpdaterConfig {
     pub verbose: bool,
+    /// Extensions (without leading dot) tried when resolving an import to a file.
+    pub extensions: Vec<String>,
 }
 
 /// Update imports in all TypeScript files within a project directory
@@ -69,12 +71,12 @@ fn update_imports_in_file(
     let original_content = std::fs::read_to_string(file_path)?;
     let file_dir = file_path.parent().unwrap_or(Path::new("."));
 
-    let (content, modified) = rewrite_imports(&original_content, |import_path| {
+    let (content, modified) = rewrite_imports(&original_content, |import_path, _kind| {
         if !import_path.starts_with('.') {
             return None;
         }
         for (old_path, new_path) in moved_files {
-            if does_import_resolve_to_file(import_path, file_path, old_path) {
+            if does_import_resolve_to_file(import_path, file_path, old_path, &config.extensions) {
                 return Some(calculate_relative_path(file_dir, new_path));
             }
         }
@@ -110,14 +112,14 @@ fn recalculate_own_imports(
     let old_dir = old_path.parent().unwrap_or(Path::new("."));
     let new_dir = new_path.parent().unwrap_or(Path::new("."));
 
-    let (content, modified) = rewrite_imports(&file_content, |import_path| {
+    let (content, modified) = rewrite_imports(&file_content, |import_path, _kind| {
         if !import_path.starts_with('.') {
             return None;
         }
 
         // Resolve the import as it was written, relative to the OLD location.
         let target = normalize_path(&old_dir.join(import_path));
-        let resolved_target = resolve_to_existing_file(&target);
+        let resolved_target = resolve_to_existing_file(&target, &config.extensions);
 
         // If that target was itself moved, follow it to its new location.
         let final_target = moved_files

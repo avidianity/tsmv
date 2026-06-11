@@ -29,12 +29,27 @@ fn language() -> &'static tree_sitter::Language {
     LANG.get_or_init(|| tree_sitter_typescript::LANGUAGE_TSX.into())
 }
 
-/// A module-specifier occurrence: the byte range *inside* the quotes and the
-/// specifier text itself.
+/// What kind of reference a specifier came from. Callers use this to decide
+/// whether a rewrite is appropriate — e.g. a `new URL(..., import.meta.url)` path
+/// is module-relative and must stay relative, so it is never aliased.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpecKind {
+    /// `import`/`export … from`, side-effect `import`, dynamic `import()`,
+    /// `require()`, and `jest`/`vi` mock calls.
+    Import,
+    /// `new URL('…', import.meta.url)`.
+    Url,
+    /// `require.context('…', …)`.
+    Context,
+}
+
+/// A module-specifier occurrence: the byte range *inside* the quotes, the
+/// specifier text itself, and the kind of reference it came from.
 struct SpecSpan {
     start: usize,
     end: usize,
     text: String,
+    kind: SpecKind,
 }
 
 /// Parse `content` and collect every static-string module specifier in source
@@ -53,8 +68,8 @@ fn collect_specs(content: &str) -> Vec<SpecSpan> {
     let mut out = Vec::new();
     let mut stack = vec![tree.root_node()];
     while let Some(node) = stack.pop() {
-        if let Some(string_node) = specifier_string(node, src) {
-            if let Some(span) = inner_span(string_node, content) {
+        if let Some((string_node, kind)) = specifier_string(node, src) {
+            if let Some(span) = inner_span(string_node, content, kind) {
                 out.push(span);
             }
         }
@@ -71,42 +86,92 @@ fn collect_specs(content: &str) -> Vec<SpecSpan> {
     out
 }
 
-/// If `node` carries a module specifier, return its `string` node.
-fn specifier_string<'a>(node: Node<'a>, src: &[u8]) -> Option<Node<'a>> {
+/// First direct `string` child of an `arguments` node.
+fn first_string_arg<'a>(args: Node<'a>) -> Option<Node<'a>> {
+    let mut i = 0;
+    while i < args.child_count() {
+        let child = args.child(i)?;
+        if child.kind() == "string" {
+            return Some(child);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// If `node` carries a module specifier, return its `string` node and kind.
+fn specifier_string<'a>(node: Node<'a>, src: &[u8]) -> Option<(Node<'a>, SpecKind)> {
     match node.kind() {
         // import … from '…' | export … from '…' | import '…'
         "import_statement" | "export_statement" => {
             let source = node.child_by_field_name("source")?;
-            (source.kind() == "string").then_some(source)
+            (source.kind() == "string").then_some((source, SpecKind::Import))
         }
-        // import('…') | require('…') | jest.mock('…') | vi.mock('…')
+        // import('…') | require('…') | jest.mock('…') | vi.mock('…') | require.context('…', …)
         "call_expression" => {
             let func = node.child_by_field_name("function")?;
+            let args = node.child_by_field_name("arguments")?;
+            let mut kind = SpecKind::Import;
             let is_module_call = match func.kind() {
                 "import" => true,
                 "identifier" => node_text(func, src) == "require",
                 "member_expression" => {
                     let object = func.child_by_field_name("object")?;
-                    matches!(node_text(object, src), "jest" | "vi")
+                    match node_text(object, src) {
+                        "jest" | "vi" => true,
+                        "require" => {
+                            let is_context = func
+                                .child_by_field_name("property")
+                                .map(|p| node_text(p, src) == "context")
+                                .unwrap_or(false);
+                            if is_context {
+                                kind = SpecKind::Context;
+                            }
+                            is_context
+                        }
+                        _ => false,
+                    }
                 }
                 _ => false,
             };
             if !is_module_call {
                 return None;
             }
-            // The module path is the first direct string argument.
+            Some((first_string_arg(args)?, kind))
+        }
+        // new URL('…', import.meta.url) — module-relative asset/worker URLs.
+        "new_expression" => {
+            let ctor = node.child_by_field_name("constructor")?;
+            if node_text(ctor, src) != "URL" {
+                return None;
+            }
             let args = node.child_by_field_name("arguments")?;
+            // Only when based on import.meta.url, so plain `new URL('http://…')`
+            // and runtime bases are left alone.
+            let mut has_meta = false;
             let mut i = 0;
             while i < args.child_count() {
                 let child = args.child(i)?;
-                if child.kind() == "string" {
-                    return Some(child);
+                if child.kind() != "string" && node_text(child, src) == "import.meta.url" {
+                    has_meta = true;
                 }
                 i += 1;
             }
-            None
+            if !has_meta {
+                return None;
+            }
+            Some((first_string_arg(args)?, SpecKind::Url))
         }
         _ => None,
+    }
+}
+
+/// Split a webpack-style inline-loader prefix off a specifier:
+/// `"raw-loader!./a"` → `("raw-loader!", "./a")`; no `!` → `("", spec)`.
+fn split_loader_prefix(spec: &str) -> (&str, &str) {
+    match spec.rfind('!') {
+        Some(i) => spec.split_at(i + 1),
+        None => ("", spec),
     }
 }
 
@@ -115,7 +180,7 @@ fn node_text<'a>(node: Node, src: &'a [u8]) -> &'a str {
 }
 
 /// Byte range and text *between* the quotes of a `string` node.
-fn inner_span(string_node: Node, content: &str) -> Option<SpecSpan> {
+fn inner_span(string_node: Node, content: &str, kind: SpecKind) -> Option<SpecSpan> {
     let start = string_node.start_byte();
     let end = string_node.end_byte();
     // A string node always includes its two single-byte quote delimiters.
@@ -124,26 +189,33 @@ fn inner_span(string_node: Node, content: &str) -> Option<SpecSpan> {
     }
     let (start, end) = (start + 1, end - 1);
     let text = content.get(start..end)?.to_string();
-    Some(SpecSpan { start, end, text })
+    Some(SpecSpan {
+        start,
+        end,
+        text,
+        kind,
+    })
 }
 
 /// Rewrite every module specifier in `content` using `f`.
 ///
-/// `f` receives each specifier (without quotes) and returns `Some(replacement)`
-/// to rewrite it, or `None` to leave it untouched. Returns the new content and
-/// whether any change was made. Only the text inside the quotes is replaced, so
-/// quote style and all surrounding formatting are preserved exactly.
+/// `f` receives the specifier path (without quotes, and without any inline-loader
+/// prefix) and its [`SpecKind`], and returns `Some(replacement)` to rewrite it or
+/// `None` to leave it untouched. Any loader prefix is preserved automatically.
+/// Returns the new content and whether any change was made. Only the text inside
+/// the quotes is replaced, so quote style and surrounding formatting are kept.
 pub fn rewrite_imports<F>(content: &str, mut f: F) -> (String, bool)
 where
-    F: FnMut(&str) -> Option<String>,
+    F: FnMut(&str, SpecKind) -> Option<String>,
 {
     let specs = collect_specs(content);
 
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for spec in &specs {
-        if let Some(new_spec) = f(&spec.text) {
-            if new_spec != spec.text {
-                edits.push((spec.start, spec.end, new_spec));
+        let (prefix, path) = split_loader_prefix(&spec.text);
+        if let Some(new_path) = f(path, spec.kind) {
+            if new_path != path {
+                edits.push((spec.start, spec.end, format!("{prefix}{new_path}")));
             }
         }
     }
@@ -162,17 +234,20 @@ where
     (result, true)
 }
 
-/// Collect every module specifier (without quotes) found in `content`.
+/// Collect every module specifier path (without quotes or loader prefix).
 pub fn collect_import_specifiers(content: &str) -> Vec<String> {
-    collect_specs(content).into_iter().map(|s| s.text).collect()
+    collect_specs(content)
+        .into_iter()
+        .map(|s| split_loader_prefix(&s.text).1.to_string())
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn repoint<'a>(old: &'a str, new: &'a str) -> impl Fn(&str) -> Option<String> + 'a {
-        move |s: &str| (s == old).then(|| new.to_string())
+    fn repoint<'a>(old: &'a str, new: &'a str) -> impl Fn(&str, SpecKind) -> Option<String> + 'a {
+        move |s: &str, _k: SpecKind| (s == old).then(|| new.to_string())
     }
 
     #[test]
@@ -241,11 +316,57 @@ mod tests {
     #[test]
     fn leaves_bare_specifiers_alone() {
         let src = "import { x } from 'react';\n";
-        let (out, changed) = rewrite_imports(src, |s| {
+        let (out, changed) = rewrite_imports(src, |s, _k| {
             s.starts_with('.').then(|| "CHANGED".to_string())
         });
         assert!(!changed);
         assert_eq!(out, src);
+    }
+
+    #[test]
+    fn rewrites_new_url_with_import_meta() {
+        let src = "const w = new Worker(new URL('./old', import.meta.url));\n";
+        let (out, changed) = rewrite_imports(src, repoint("./old", "./new"));
+        assert!(changed, "new URL(import.meta.url) should be rewritten");
+        assert!(out.contains("new URL('./new', import.meta.url)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn leaves_plain_new_url_alone() {
+        // No import.meta.url base -> not a module-relative URL.
+        let src = "const u = new URL('./old', base);\n";
+        let (out, changed) = rewrite_imports(src, repoint("./old", "./new"));
+        assert!(!changed, "new URL without import.meta.url must be untouched: {out}");
+    }
+
+    #[test]
+    fn rewrites_require_context_dir() {
+        let src = "const ctx = require.context('./old', true, /\\.js$/);\n";
+        let (out, changed) = rewrite_imports(src, repoint("./old", "./new"));
+        assert!(changed, "require.context dir should be rewritten");
+        assert!(out.contains("require.context('./new'"), "got:\n{out}");
+    }
+
+    #[test]
+    fn preserves_loader_prefix() {
+        let src = "import css from '!!style-loader!css-loader!./old.css';\n";
+        let (out, changed) = rewrite_imports(src, repoint("./old.css", "./new.css"));
+        assert!(changed);
+        assert_eq!(out, "import css from '!!style-loader!css-loader!./new.css';\n");
+    }
+
+    #[test]
+    fn url_and_context_report_their_kind() {
+        // The absolute-import pass relies on kind to skip URL/context specifiers.
+        let src = "new URL('./a', import.meta.url);\nrequire.context('./b', true, /x/);\nimport './c';\n";
+        let mut seen: Vec<(String, SpecKind)> = Vec::new();
+        rewrite_imports(src, |s, k| {
+            seen.push((s.to_string(), k));
+            None
+        });
+        assert!(seen.contains(&("./a".to_string(), SpecKind::Url)));
+        assert!(seen.contains(&("./b".to_string(), SpecKind::Context)));
+        assert!(seen.contains(&("./c".to_string(), SpecKind::Import)));
     }
 
     #[test]
@@ -255,9 +376,12 @@ mod tests {
                    import './c';\n\
                    const d = import('./d');\n\
                    const e = require('./e');\n\
-                   jest.mock('./f');\n";
+                   jest.mock('./f');\n\
+                   const u = new URL('./g', import.meta.url);\n\
+                   const c = require.context('./h', true, /x/);\n\
+                   import s from 'raw-loader!./i';\n";
         let specs = collect_import_specifiers(src);
-        for want in ["./a", "./b", "./c", "./d", "./e", "./f"] {
+        for want in ["./a", "./b", "./c", "./d", "./e", "./f", "./g", "./h", "./i"] {
             assert!(specs.contains(&want.to_string()), "missing {want} in {specs:?}");
         }
     }

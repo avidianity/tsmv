@@ -37,4 +37,25 @@ impl MoveOptions {
             .map(|s| if s.starts_with('.') { s.to_string() } else { format!(".{s}") })
             .collect()
     }
+
+    /// Extensions tried when resolving an import specifier to a file: the
+    /// configured extensions unioned with the always-supported defaults
+    /// (`ts`, `tsx`, `js`, `jsx`), returned without leading dots. The union
+    /// keeps standard resolution working even when `--extensions` narrows or
+    /// adds to the set (e.g. `mjs`, `vue`).
+    pub fn resolution_extensions(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for ext in self
+            .extensions
+            .iter()
+            .map(|s| s.as_str())
+            .chain(["ts", "tsx", "js", "jsx"])
+        {
+            let ext = ext.trim_start_matches('.');
+            if !ext.is_empty() && !out.iter().any(|e| e == ext) {
+                out.push(ext.to_string());
+            }
+        }
+        out
+    }
 }

@@ -145,8 +145,8 @@ fn parse_compiler_options(value: &serde_json::Value) -> CompilerOptions {
     }
 }
 
-/// Find tsconfig.json by walking up from the given directory.
-/// Checks for tsconfig.json first, then tsconfig.build.json.
+/// Find a TS/JS project config by walking up from the given directory.
+/// Checks tsconfig.json, then tsconfig.build.json, then jsconfig.json.
 pub fn find_tsconfig(start_dir: Option<&Path>) -> Option<PathBuf> {
     let mut current = start_dir
         .map(|p| p.to_path_buf())
@@ -160,6 +160,11 @@ pub fn find_tsconfig(start_dir: Option<&Path>) -> Option<PathBuf> {
         let tsconfig_build = current.join("tsconfig.build.json");
         if tsconfig_build.exists() {
             return Some(tsconfig_build);
+        }
+        // JS projects use jsconfig.json with the same baseUrl/paths shape.
+        let jsconfig = current.join("jsconfig.json");
+        if jsconfig.exists() {
+            return Some(jsconfig);
         }
 
         if let Some(parent) = current.parent() {
