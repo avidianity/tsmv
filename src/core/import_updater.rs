@@ -24,7 +24,7 @@ pub fn update_imports_in_project(
         eprintln!("Project root: {}", project_root.display());
     }
 
-    let all_files = find_typescript_files(project_root);
+    let all_files = find_typescript_files(project_root, &config.extensions);
 
     if config.verbose {
         eprintln!("Found {} TypeScript files to check", all_files.len());
@@ -144,33 +144,37 @@ fn recalculate_own_imports(
     Ok(modified)
 }
 
-/// Resolve a path to an existing file by trying common extensions and index files.
-/// Falls back to `<path>.ts` so a target that was already moved off disk still maps
-/// to a key present in the move mapping.
-fn resolve_to_existing_file(path: &Path) -> PathBuf {
+/// Resolve a path to an existing file by trying the configured extensions and
+/// index files. Falls back to `<path>.<first-ext>` (or `.ts`) so a target that was
+/// already moved off disk still maps to a key present in the move mapping.
+fn resolve_to_existing_file(path: &Path, extensions: &[String]) -> PathBuf {
     if path.exists() {
         return path.to_path_buf();
     }
-    for ext in &["ts", "tsx", "js", "jsx"] {
+    for ext in extensions {
         let with_ext = PathBuf::from(format!("{}.{ext}", path.display()));
         if with_ext.exists() {
             return with_ext;
         }
     }
-    let index = path.join("index.ts");
-    if index.exists() {
-        return index;
+    for ext in extensions {
+        let index = path.join(format!("index.{ext}"));
+        if index.exists() {
+            return index;
+        }
     }
-    let index_tsx = path.join("index.tsx");
-    if index_tsx.exists() {
-        return index_tsx;
-    }
-    // Fallback: assume .ts
-    PathBuf::from(format!("{}.ts", path.display()))
+    // Fallback: assume first configured extension (or .ts)
+    let fallback_ext = extensions.first().map(|s| s.as_str()).unwrap_or("ts");
+    PathBuf::from(format!("{}.{fallback_ext}", path.display()))
 }
 
 /// Check if an import path resolves to a specific file (path math only, no disk check).
-fn does_import_resolve_to_file(import_path: &str, from_file: &Path, target_file: &Path) -> bool {
+fn does_import_resolve_to_file(
+    import_path: &str,
+    from_file: &Path,
+    target_file: &Path,
+    extensions: &[String],
+) -> bool {
     if !import_path.starts_with('.') {
         return false;
     }
@@ -186,21 +190,23 @@ fn does_import_resolve_to_file(import_path: &str, from_file: &Path, target_file:
         return true;
     }
 
-    // Try with common TypeScript extensions
-    for ext in &["ts", "tsx", "js", "jsx"] {
+    // Try with configured extensions
+    for ext in extensions {
         let with_ext = format!("{resolved_str}.{ext}");
         if with_ext == target_str {
             return true;
         }
     }
 
-    // Check for index file resolution: import './dir' resolving to './dir/index.ts'
+    // Check for index file resolution: import './dir' resolving to './dir/index.{ext}'
     if let Some(file_name) = target_file.file_name() {
         let file_name = file_name.to_string_lossy();
-        if file_name == "index.ts" || file_name == "index.tsx" {
-            let parent = target_file.parent().unwrap_or(Path::new("."));
-            if parent.to_string_lossy() == resolved_str {
-                return true;
+        for ext in extensions {
+            if file_name == format!("index.{ext}") {
+                let parent = target_file.parent().unwrap_or(Path::new("."));
+                if parent.to_string_lossy() == resolved_str {
+                    return true;
+                }
             }
         }
     }
@@ -208,14 +214,14 @@ fn does_import_resolve_to_file(import_path: &str, from_file: &Path, target_file:
     false
 }
 
-/// Recursively find all TypeScript/JavaScript files in a directory.
-fn find_typescript_files(base_dir: &Path) -> Vec<PathBuf> {
+/// Recursively find all source files matching the configured extensions.
+fn find_typescript_files(base_dir: &Path, extensions: &[String]) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    scan_directory(base_dir, &mut files);
+    scan_directory(base_dir, &mut files, extensions);
     files
 }
 
-fn scan_directory(dir: &Path, files: &mut Vec<PathBuf>) {
+fn scan_directory(dir: &Path, files: &mut Vec<PathBuf>, extensions: &[String]) {
     let iter = match std::fs::read_dir(dir) {
         Ok(it) => it,
         Err(_) => return,
@@ -228,11 +234,11 @@ fn scan_directory(dir: &Path, files: &mut Vec<PathBuf>) {
             // Skip common non-source directories
             let skip = ["node_modules", "dist", ".git", ".next", "build", "target"];
             if !skip.contains(&dir_name.as_ref()) {
-                scan_directory(&path, files);
+                scan_directory(&path, files, extensions);
             }
         } else if path.is_file() {
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if matches!(ext, "ts" | "tsx" | "js" | "jsx") {
+                if extensions.iter().any(|e| e == ext) {
                     files.push(path);
                 }
             }

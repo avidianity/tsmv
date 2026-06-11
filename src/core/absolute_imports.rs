@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::core::import_path::normalize_path;
-use crate::core::import_ast::rewrite_imports;
+use crate::core::import_ast::{rewrite_imports, SpecKind};
 use crate::core::tsconfig::ResolvedTsConfig;
 
 /// Configuration extracted from tsconfig.json path aliases.
@@ -131,7 +131,12 @@ pub fn update_imports_to_absolute(
 ) -> anyhow::Result<usize> {
     let original = std::fs::read_to_string(file_path)?;
 
-    let (updated, modified) = rewrite_imports(&original, |import_path| {
+    let (updated, modified) = rewrite_imports(&original, |import_path, kind| {
+        // new URL(import.meta.url) and require.context paths are inherently
+        // relative — they must never be converted to alias imports.
+        if matches!(kind, SpecKind::Url | SpecKind::Context) {
+            return None;
+        }
         let absolute =
             convert_to_absolute_import(import_path, file_path, alias_config, project_root, verbose);
         (absolute != import_path).then_some(absolute)

@@ -144,6 +144,7 @@ pub fn move_files(
             &project_root,
             &ImportUpdaterConfig {
                 verbose: options.verbose,
+                extensions: options.resolution_extensions(),
             },
         );
     }
