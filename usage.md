@@ -4,7 +4,6 @@
 rewrites the affected `import`/`export` statements so your project keeps
 compiling.
 
-It is a Rust port of [`ts-import-move`](https://github.com/drumnation/ts-import-move).
 `tsmv` parses each file with a real TypeScript/TSX grammar
 ([tree-sitter](https://tree-sitter.github.io/)) and rewrites the actual module
 references — so it never mistakes import-looking text inside a comment or a

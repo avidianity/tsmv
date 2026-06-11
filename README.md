@@ -103,6 +103,33 @@ The last argument is always the destination; everything before it is a source.
 
 ---
 
+## LLM / agent usage
+
+`tsmv` is designed to be scriptable by LLMs and coding agents. Ship the
+structured reference doc into the agent's context so it can construct correct
+commands without guessing:
+
+```bash
+tsmv --usage-llm
+```
+
+This prints **[usage.llm.md](./usage.llm.md)** — a condensed, machine-oriented
+reference with:
+
+- Exact invocation grammar and flag table
+- Semantic invariants (rename vs. move, inbound vs. self-rewrite rules)
+- Every supported specifier form and what is deliberately not rewritten
+- Decision rules for common agent scenarios (dry-run first, when to add `-r` /
+  `-f` / `--no-absolute-imports`, etc.)
+- Command → outcome examples
+
+**How to wire it into your agent:** pipe `tsmv --usage-llm` into the system
+prompt or a tool description whenever `tsmv` is available in the environment.
+If the binary isn't installed yet, read `usage.llm.md` directly from the repo.
+The doc is self-contained — no other files are needed to use `tsmv` correctly.
+
+---
+
 ## How it works
 
 1. Discover the source files (expanding directories with `-r`, filtered by
