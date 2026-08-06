@@ -53,8 +53,16 @@ fn main() {
         eprintln!("DEBUG: options: {options:?}");
     }
 
-    if let Err(e) = tsmv::move_files(sources, destination, &options) {
-        eprintln!("Move operation failed: {e}");
-        std::process::exit(1);
+    // A failed move must be visible to the shell. Operational failures (a move
+    // that could not be performed) come back inside `Ok` with `errors` filled
+    // in and are already reported to stderr, so exit non-zero without
+    // reprinting them.
+    match tsmv::move_files(sources, destination, &options) {
+        Err(e) => {
+            eprintln!("Move operation failed: {e}");
+            std::process::exit(1);
+        }
+        Ok(result) if !result.errors.is_empty() => std::process::exit(1),
+        Ok(_) => {}
     }
 }
