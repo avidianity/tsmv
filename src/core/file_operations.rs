@@ -45,28 +45,19 @@ pub fn plan_file_operations(
                 }
             };
             let dest = destination.join(&relative);
-
-            // Ensure destination subdirectory exists
-            if let Some(parent) = dest.parent() {
-                operations.push(FileOperation::CreateDir {
-                    path: parent.to_path_buf(),
-                });
-            }
-
+            push_parent_dir(&mut operations, &dest);
             dest
         } else if destination_is_file_rename(destination, source_files.len()) {
-            // Single file rename: destination IS the new file path
-            destination.to_path_buf()
+            // Single file rename: destination IS the new file path. Its parent
+            // may not exist yet (renaming into a brand-new folder), so it still
+            // needs creating before the move.
+            let dest = destination.to_path_buf();
+            push_parent_dir(&mut operations, &dest);
+            dest
         } else {
             // Multiple files or destination is directory: append filename
             let dest = destination.join(file_name);
-
-            if let Some(parent) = dest.parent() {
-                operations.push(FileOperation::CreateDir {
-                    path: parent.to_path_buf(),
-                });
-            }
-
+            push_parent_dir(&mut operations, &dest);
             dest
         };
 
@@ -77,6 +68,21 @@ pub fn plan_file_operations(
     }
 
     operations
+}
+
+/// Record a `CreateDir` for a destination's parent directory.
+///
+/// Every planned move goes through here so a move can never fail with ENOENT on
+/// a destination whose parent does not exist yet. An empty parent (a bare
+/// filename, meaning the current directory) needs no directory and is skipped.
+fn push_parent_dir(operations: &mut Vec<FileOperation>, dest: &Path) {
+    let Some(parent) = dest.parent() else { return };
+    if parent.as_os_str().is_empty() {
+        return;
+    }
+    operations.push(FileOperation::CreateDir {
+        path: parent.to_path_buf(),
+    });
 }
 
 /// Check if destination looks like a file rename (has a TS extension and only one source).
@@ -266,16 +272,66 @@ mod tests {
             Path::new("/src/NewButton.ts"),
             None,
         );
-        // File rename: only the Move operation, no CreateDir needed
-        // (parent directory /src already exists)
-        assert_eq!(ops.len(), 1);
+        // A rename still plans its parent directory, so renaming into a folder
+        // that does not exist yet works instead of failing with ENOENT.
+        assert_eq!(ops.len(), 2);
         match &ops[0] {
+            FileOperation::CreateDir { path } => {
+                assert_eq!(path, Path::new("/src"));
+            }
+            _ => panic!("Expected CreateDir"),
+        }
+        match &ops[1] {
             FileOperation::Move { source, dest } => {
                 assert_eq!(source, Path::new("/src/Button.ts"));
                 assert_eq!(dest, Path::new("/src/NewButton.ts"));
             }
             _ => panic!("Expected Move"),
         }
+    }
+
+    #[test]
+    fn test_plan_file_rename_into_missing_nested_dirs() {
+        let ops = plan_file_operations(
+            &[PathBuf::from("/src/pages/ai-assistant.tsx")],
+            Path::new("/src/features/ai-assistant/pages/assistant.tsx"),
+            None,
+        );
+        match &ops[0] {
+            FileOperation::CreateDir { path } => {
+                assert_eq!(path, Path::new("/src/features/ai-assistant/pages"));
+            }
+            _ => panic!("Expected CreateDir for the missing nested parent"),
+        }
+    }
+
+    #[test]
+    fn test_plan_bare_filename_rename_plans_no_dir() {
+        let ops = plan_file_operations(
+            &[PathBuf::from("Button.ts")],
+            Path::new("NewButton.ts"),
+            None,
+        );
+        // A bare filename has an empty parent; there is nothing to create.
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(ops[0], FileOperation::Move { .. }));
+    }
+
+    #[test]
+    fn test_execute_file_rename_into_missing_nested_dirs() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("pages/ai-assistant.tsx");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, "export default function A() {}").unwrap();
+
+        let dest = dir.path().join("features/ai-assistant/pages/assistant.tsx");
+        let ops = plan_file_operations(std::slice::from_ref(&src), &dest, None);
+        let (result, mapping) = execute_file_operations(&ops, false);
+
+        assert!(result.errors.is_empty(), "unexpected errors: {:?}", result.errors);
+        assert!(dest.exists(), "destination file was not created");
+        assert!(!src.exists(), "source file was not removed");
+        assert_eq!(mapping.get(&src), Some(&dest));
     }
 
     #[test]
