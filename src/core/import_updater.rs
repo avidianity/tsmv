@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::core::alias::PathAliasConfig;
 use crate::core::import_path::{calculate_relative_path, normalize_path};
 use crate::core::import_ast::rewrite_imports;
 
@@ -9,6 +10,58 @@ pub struct ImportUpdaterConfig {
     pub verbose: bool,
     /// Extensions (without leading dot) tried when resolving an import to a file.
     pub extensions: Vec<String>,
+    /// tsconfig `paths` aliases, so alias specifiers can be followed to the
+    /// file they point at and rewritten in the same form.
+    pub aliases: PathAliasConfig,
+}
+
+/// How a specifier was written, so a rewrite can be emitted the same way.
+///
+/// A project that imports exclusively through aliases must not have relative
+/// paths introduced into it, and vice versa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpecifierForm {
+    Relative,
+    Alias,
+}
+
+/// Resolve a module specifier to the absolute path it points at.
+///
+/// Returns `None` for bare package specifiers such as `react`, which refer to
+/// no file in this project.
+fn resolve_specifier(
+    specifier: &str,
+    from_dir: &Path,
+    aliases: &PathAliasConfig,
+) -> Option<(PathBuf, SpecifierForm)> {
+    if specifier.starts_with('.') {
+        return Some((
+            normalize_path(&from_dir.join(specifier)),
+            SpecifierForm::Relative,
+        ));
+    }
+    aliases
+        .resolve(specifier)
+        .map(|path| (path, SpecifierForm::Alias))
+}
+
+/// Render `target` as a specifier written the same way as the original.
+///
+/// An alias import that no mapping covers falls back to a relative path, which
+/// is always correct even if it breaks a project's alias-only convention;
+/// emitting an unresolvable alias would not be.
+fn render_specifier(
+    target: &Path,
+    form: SpecifierForm,
+    from_dir: &Path,
+    aliases: &PathAliasConfig,
+) -> String {
+    if form == SpecifierForm::Alias {
+        if let Some(alias) = aliases.to_alias(target) {
+            return alias;
+        }
+    }
+    calculate_relative_path(from_dir, target)
 }
 
 /// Update imports in all TypeScript files within a project directory
@@ -72,12 +125,10 @@ fn update_imports_in_file(
     let file_dir = file_path.parent().unwrap_or(Path::new("."));
 
     let (content, modified) = rewrite_imports(&original_content, |import_path, _kind| {
-        if !import_path.starts_with('.') {
-            return None;
-        }
+        let (resolved, form) = resolve_specifier(import_path, file_dir, &config.aliases)?;
         for (old_path, new_path) in moved_files {
-            if does_import_resolve_to_file(import_path, file_path, old_path, &config.extensions) {
-                return Some(calculate_relative_path(file_dir, new_path));
+            if resolved_matches_file(&resolved, old_path, &config.extensions) {
+                return Some(render_specifier(new_path, form, file_dir, &config.aliases));
             }
         }
         None
@@ -97,7 +148,10 @@ fn update_imports_in_file(
 }
 
 /// Pass 2: recalculate a moved file's own imports from its new location.
-/// Handles the case where the moved file imports a sibling that was NOT moved.
+///
+/// A relative import meant something different at the old location and must be
+/// recomputed. An alias import points at a fixed path, so it only changes when
+/// the file it names was itself moved.
 fn recalculate_own_imports(
     old_path: &Path,
     new_path: &Path,
@@ -113,22 +167,25 @@ fn recalculate_own_imports(
     let new_dir = new_path.parent().unwrap_or(Path::new("."));
 
     let (content, modified) = rewrite_imports(&file_content, |import_path, _kind| {
-        if !import_path.starts_with('.') {
-            return None;
+        // Resolve the import as it was written, from the ORIGINAL location.
+        let (resolved, form) = resolve_specifier(import_path, old_dir, &config.aliases)?;
+        let resolved = resolve_to_existing_file(&resolved, &config.extensions);
+        let moved_to = moved_files.get(&resolved);
+
+        match form {
+            // Location-independent: untouched unless its target moved.
+            SpecifierForm::Alias => Some(render_specifier(
+                moved_to?,
+                form,
+                new_dir,
+                &config.aliases,
+            )),
+            // Relative to the file, so recompute whether or not the target moved.
+            SpecifierForm::Relative => {
+                let target = moved_to.cloned().unwrap_or(resolved);
+                Some(render_specifier(&target, form, new_dir, &config.aliases))
+            }
         }
-
-        // Resolve the import as it was written, relative to the OLD location.
-        let target = normalize_path(&old_dir.join(import_path));
-        let resolved_target = resolve_to_existing_file(&target, &config.extensions);
-
-        // If that target was itself moved, follow it to its new location.
-        let final_target = moved_files
-            .get(&resolved_target)
-            .cloned()
-            .unwrap_or(resolved_target);
-
-        // Recompute the path from the file's NEW location.
-        Some(calculate_relative_path(new_dir, &final_target))
     });
 
     if modified {
@@ -168,43 +225,31 @@ fn resolve_to_existing_file(path: &Path, extensions: &[String]) -> PathBuf {
     PathBuf::from(format!("{}.{fallback_ext}", path.display()))
 }
 
-/// Check if an import path resolves to a specific file (path math only, no disk check).
-fn does_import_resolve_to_file(
-    import_path: &str,
-    from_file: &Path,
-    target_file: &Path,
-    extensions: &[String],
-) -> bool {
-    if !import_path.starts_with('.') {
-        return false;
+/// Check whether an already-resolved import target refers to `target_file`.
+///
+/// Import specifiers normally carry no extension, so this also tries the
+/// configured extensions and the `dir` -> `dir/index.ext` form.
+fn resolved_matches_file(resolved: &Path, target_file: &Path, extensions: &[String]) -> bool {
+    if resolved == target_file {
+        return true;
     }
-
-    let source_dir = from_file.parent().unwrap_or(Path::new("."));
-    let resolved = normalize_path(&source_dir.join(import_path));
 
     let resolved_str = resolved.to_string_lossy();
     let target_str = target_file.to_string_lossy();
 
-    // Direct match
-    if resolved_str == target_str {
-        return true;
-    }
-
-    // Try with configured extensions
     for ext in extensions {
-        let with_ext = format!("{resolved_str}.{ext}");
-        if with_ext == target_str {
+        if format!("{resolved_str}.{ext}") == target_str {
             return true;
         }
     }
 
-    // Check for index file resolution: import './dir' resolving to './dir/index.{ext}'
+    // import './dir' resolving to './dir/index.{ext}'
     if let Some(file_name) = target_file.file_name() {
         let file_name = file_name.to_string_lossy();
         for ext in extensions {
             if file_name == format!("index.{ext}") {
                 let parent = target_file.parent().unwrap_or(Path::new("."));
-                if parent.to_string_lossy() == resolved_str {
+                if parent == resolved {
                     return true;
                 }
             }

@@ -1,96 +1,8 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::core::import_path::normalize_path;
+use crate::core::alias::PathAliasConfig;
 use crate::core::import_ast::{rewrite_imports, SpecKind};
-use crate::core::tsconfig::ResolvedTsConfig;
-
-/// A single `paths` mapping, pre-resolved so matching is a plain path compare.
-#[derive(Debug, Clone)]
-struct AliasRule {
-    /// The alias pattern from tsconfig, e.g. `@/*`.
-    pattern: String,
-    /// Absolute path the pattern's target resolves to. For a wildcard rule this
-    /// is the directory prefix; for an exact rule it is the file itself.
-    target: PathBuf,
-    wildcard: bool,
-}
-
-/// Path aliases resolved against the tsconfig that declared them.
-#[derive(Debug, Clone)]
-pub struct PathAliasConfig {
-    pub prefix: String,
-    /// Absolute directory that alias targets resolve against (`baseUrl`).
-    pub base_dir: PathBuf,
-    rules: Vec<AliasRule>,
-}
-
-/// Build alias rules from raw `paths` entries anchored at `base_dir`.
-///
-/// Rules are ordered most-specific-first so the longest matching target wins,
-/// and the order is stable, which a `HashMap` iteration could not guarantee.
-fn build_rules(paths: &HashMap<String, Vec<String>>, base_dir: &Path) -> Vec<AliasRule> {
-    let mut rules: Vec<AliasRule> = paths
-        .iter()
-        .filter_map(|(pattern, targets)| {
-            let target = targets.first()?;
-            let wildcard = pattern.contains('*') && target.contains('*');
-            // For a wildcard target the part before `*` is a directory prefix.
-            let literal = match target.split_once('*') {
-                Some((before, _)) => before,
-                None => target.as_str(),
-            };
-            Some(AliasRule {
-                pattern: pattern.clone(),
-                target: normalize_path(&base_dir.join(literal)),
-                wildcard,
-            })
-        })
-        .collect();
-
-    rules.sort_by(|a, b| {
-        b.target
-            .components()
-            .count()
-            .cmp(&a.target.components().count())
-            .then_with(|| a.pattern.cmp(&b.pattern))
-    });
-    rules
-}
-
-/// Parse path aliases from a tsconfig.json.
-///
-/// `project_root` is only the fallback anchor for a project without usable
-/// `paths`; a real tsconfig anchors its aliases at its own `baseUrl`.
-pub fn parse_path_aliases(
-    tsconfig: Option<&ResolvedTsConfig>,
-    alias_prefix: &str,
-    project_root: &Path,
-) -> PathAliasConfig {
-    let fallback = PathAliasConfig {
-        prefix: alias_prefix.to_string(),
-        base_dir: project_root.join("src"),
-        rules: Vec::new(),
-    };
-
-    let Some(options) = tsconfig.and_then(|c| c.compiler_options.as_ref()) else {
-        return fallback;
-    };
-    let (Some(base_dir), Some(paths)) = (options.alias_base_dir(), options.paths.as_ref()) else {
-        return fallback;
-    };
-
-    let rules = build_rules(paths, base_dir);
-    if rules.is_empty() {
-        return fallback;
-    }
-
-    PathAliasConfig {
-        prefix: alias_prefix.to_string(),
-        base_dir: base_dir.to_path_buf(),
-        rules,
-    }
-}
+use crate::core::import_path::normalize_path;
 
 /// Convert a relative import to an absolute (alias) import.
 ///
@@ -103,12 +15,8 @@ pub fn convert_to_absolute_import(
     alias_config: &PathAliasConfig,
     verbose: bool,
 ) -> String {
-    // Already absolute (starts with alias prefix)
-    if relative_import.starts_with(&alias_config.prefix) {
-        return relative_import.to_string();
-    }
-
-    // Skip non-relative imports (node_modules, built-ins)
+    // Only relative imports are candidates. Bare specifiers and imports that
+    // are already alias-form are left exactly as the author wrote them.
     if !relative_import.starts_with('.') {
         return relative_import.to_string();
     }
@@ -117,53 +25,22 @@ pub fn convert_to_absolute_import(
     let source_dir = source_file.parent().unwrap_or(Path::new("."));
     let resolved = normalize_path(&source_dir.join(relative_import));
 
-    // Match against the tsconfig path aliases, most specific first.
-    for rule in &alias_config.rules {
-        let absolute = if rule.wildcard {
-            // Component-wise so `src2/x` never matches a `src/` target.
-            let Ok(rest) = resolved.strip_prefix(&rule.target) else {
-                continue;
-            };
-            let rest = rest.to_string_lossy().replace('\\', "/");
-            rule.pattern.replace('*', &rest)
-        } else if strip_ts_extension(&resolved) == strip_ts_extension(&rule.target) {
-            rule.pattern.clone()
-        } else {
-            continue;
-        };
-
-        if verbose {
-            eprintln!("  Converted: {relative_import} \u{2192} {absolute}");
-        }
-        return absolute;
-    }
-
-    // No `paths` mapping matched. When the project declares aliases, inventing
-    // one the compiler cannot resolve would break the build, so keep the
-    // relative import that already works.
-    if !alias_config.rules.is_empty() {
-        return relative_import.to_string();
-    }
-
-    // No aliases declared: assume the prefix maps to the base directory.
-    let Ok(rest) = resolved.strip_prefix(&alias_config.base_dir) else {
-        return relative_import.to_string();
+    let absolute = match alias_config.to_alias(&resolved) {
+        Some(alias) => alias,
+        // When the project declares aliases but none cover this file, keep the
+        // relative import that already works.
+        None if alias_config.has_rules() => return relative_import.to_string(),
+        // No aliases declared: assume the prefix maps to the base directory.
+        None => match alias_config.to_prefixed(&resolved) {
+            Some(alias) => alias,
+            None => return relative_import.to_string(),
+        },
     };
-    let rest = rest.to_string_lossy().replace('\\', "/");
-    let absolute = format!("{}/{}", alias_config.prefix, rest);
 
     if verbose {
-        eprintln!("  Converted (general): {relative_import} \u{2192} {absolute}");
+        eprintln!("  Converted: {relative_import} \u{2192} {absolute}");
     }
     absolute
-}
-
-/// Drop a TypeScript/JavaScript extension so `./a` and `./a.ts` compare equal.
-fn strip_ts_extension(path: &Path) -> PathBuf {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("ts" | "tsx" | "js" | "jsx") => path.with_extension(""),
-        _ => path.to_path_buf(),
-    }
 }
 
 /// Update all relative imports in a single file to absolute imports.
@@ -201,19 +78,16 @@ pub fn update_imports_to_absolute(
 /// Convert all relative imports to absolute in an entire project.
 pub fn convert_project_to_absolute_imports(
     project_root: &Path,
-    tsconfig: Option<&ResolvedTsConfig>,
-    alias_prefix: &str,
+    alias_config: &PathAliasConfig,
     verbose: bool,
 ) -> anyhow::Result<usize> {
-    let alias_config = parse_path_aliases(tsconfig, alias_prefix, project_root);
-
     if verbose {
         eprintln!("\nConverting relative imports to absolute imports:");
         eprintln!("  Alias prefix: {}", alias_config.prefix);
         eprintln!("  Alias base directory: {}", alias_config.base_dir.display());
         eprintln!("  Path mappings:");
-        for rule in &alias_config.rules {
-            eprintln!("    {} \u{2192} {}", rule.pattern, rule.target.display());
+        for (pattern, target) in alias_config.describe() {
+            eprintln!("    {pattern} \u{2192} {target}");
         }
     }
 
@@ -225,7 +99,7 @@ pub fn convert_project_to_absolute_imports(
 
     let mut total_converted = 0;
     for file in &all_files {
-        match update_imports_to_absolute(file, &alias_config, verbose) {
+        match update_imports_to_absolute(file, alias_config, verbose) {
             Ok(n) => total_converted += n,
             Err(e) => {
                 if verbose {
@@ -275,6 +149,7 @@ fn scan_dir(dir: &Path, files: &mut Vec<PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::alias::parse_path_aliases;
     use crate::core::tsconfig::parse_tsconfig;
     use tempfile::TempDir;
 

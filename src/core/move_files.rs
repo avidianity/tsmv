@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::errors::Result;
 use crate::core::absolute_imports::convert_project_to_absolute_imports;
+use crate::core::alias::parse_path_aliases;
 use crate::core::circular_deps::detect_circular_dependencies;
 use crate::core::file_discovery::{
     collect_files_to_process, determine_processing_mode, extract_file_paths, validate_files,
@@ -134,33 +135,33 @@ pub fn move_files(
         }
     }
 
+    // Resolve path aliases once. The import updater needs them to follow alias
+    // specifiers to the files they name, whether or not absolute-import
+    // conversion is enabled.
+    let project_root = find_project_root(&files);
+    let tsconfig = tsconfig_path
+        .as_ref()
+        .and_then(|path| parse_tsconfig(path).ok());
+    let aliases = parse_path_aliases(tsconfig.as_ref(), &options.alias_prefix, &project_root);
+
     // Update imports in project files after moves
     let mut updated_imports = 0;
     if !move_mapping.is_empty() {
-        let project_root = find_project_root(&files);
-
         updated_imports = update_imports_in_project(
             &move_mapping,
             &project_root,
             &ImportUpdaterConfig {
                 verbose: options.verbose,
                 extensions: options.resolution_extensions(),
+                aliases: aliases.clone(),
             },
         );
     }
 
     // Absolute import conversion (Phase 4.2)
     if options.absolute_imports {
-        if let Some(ref tsconfig_path) = tsconfig_path {
-            let project_root = find_project_root(&files);
-            let tsconfig = parse_tsconfig(tsconfig_path).ok();
-
-            match convert_project_to_absolute_imports(
-                &project_root,
-                tsconfig.as_ref(),
-                &options.alias_prefix,
-                options.verbose,
-            ) {
+        if tsconfig_path.is_some() {
+            match convert_project_to_absolute_imports(&project_root, &aliases, options.verbose) {
                 Ok(converted) => {
                     if options.verbose {
                         eprintln!("[LOG] Converted {converted} imports to absolute paths");

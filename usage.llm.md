@@ -48,9 +48,12 @@ All flags are global (valid before or after a subcommand).
 - Otherwise DEST is treated as a directory; sources are placed inside it by filename.
 - Directory source ⇒ internal structure is preserved under DEST.
 - Inbound rewrite: every other project file importing a moved file is repointed to the new path.
+  Applies to BOTH relative (`./x`) and tsconfig alias (`@/x`) specifiers.
 - Self rewrite: relative imports INSIDE a moved file are recomputed for the new dir.
   - Files moved together keep their mutual imports relative/internal.
   - Imports to files left behind are repointed (e.g. `./sib` → `../old/sib`).
+  - Alias imports inside a moved file name a fixed path, so they are left as-is UNLESS the
+    file they name also moved.
 - Empty source directories are removed after the move.
 - Circular dependency among moved files ⇒ advisory STDERR warning only; move still succeeds.
 - `--absolute-imports` (default) + tsconfig found ⇒ rewrites relative imports across the
@@ -60,7 +63,10 @@ All flags are global (valid before or after a subcommand).
   No `paths` at all ⇒ falls back to mapping the `baseUrl` dir → `<alias-prefix>`.
 - Imports not covered by any alias stay relative (never emit an unresolvable alias).
 - `--absolute-imports` with NO tsconfig found ⇒ conversion silently skipped.
-- Bare specifiers (`react`, `lodash`) and already-absolute imports are never modified.
+- Bare PACKAGE specifiers (`react`, `lodash`) are never modified. Alias imports (`@/x`) are
+  NOT "already absolute, skip": they are resolved via tsconfig `paths` and repointed when the
+  file they name moves. Each import is rewritten in the form it was written in
+  (alias stays alias, relative stays relative).
 
 ## REWRITTEN SPECIFIER FORMS (multi-line tolerated; literal string path required)
 

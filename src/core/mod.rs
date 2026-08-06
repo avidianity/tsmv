@@ -1,4 +1,5 @@
 pub mod absolute_imports;
+pub mod alias;
 pub mod circular_deps;
 pub mod file_discovery;
 pub mod file_operations;

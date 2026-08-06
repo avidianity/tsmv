@@ -76,10 +76,15 @@ When you move one or more files, `tsmv` performs the following steps:
    overwrites).
 4. **Updates inbound imports**: every other file in the project that imported a
    moved file has its specifier rewritten to the new location.
+   Both relative imports and tsconfig alias imports (`@/components/shell`) are
+   followed, and each is rewritten in the form it was written in, so an
+   alias-only codebase does not acquire relative paths.
 5. **Recalculates the moved files' own imports**: relative imports *inside* a
    moved file are recomputed for its new directory. Imports between files moved
    together stay relative and internal; imports to files left behind are
    re-pointed.
+   An alias import names a fixed path, so it is left alone unless the file it
+   names also moved.
 6. **Converts to absolute imports** (when `--absolute-imports` is on and a
    tsconfig is found) — see below.
 7. **Cleans up** source directories that became empty.
@@ -128,8 +133,8 @@ project** into absolute alias imports.
   `baseUrl` directory to the `--alias-prefix` (default `@`).
 - Files under `node_modules`, `dist`, `build`, `.next`, `.git`, and `target` are
   skipped.
-- Bare specifiers (`react`, `lodash`, …) and already-absolute imports are left
-  untouched.
+- Bare package specifiers (`react`, `lodash`, …) and imports already written in
+  alias form are left untouched by this pass.
 
 > **Note:** this conversion touches every TypeScript/JavaScript file in the
 > project, not only the files you moved. If you want imports to stay relative,
