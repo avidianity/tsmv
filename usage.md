@@ -113,8 +113,19 @@ By default (`--absolute-imports` is on), once the move completes and a
 project** into absolute alias imports.
 
 - It reads `compilerOptions.baseUrl` and `compilerOptions.paths` from the tsconfig
-  to decide how to map paths. If no `paths` are defined it falls back to mapping
-  `src/` to the `--alias-prefix` (default `@`).
+  to decide how to map paths.
+  Each `paths` target is resolved against `baseUrl`, exactly as TypeScript does, so
+  `baseUrl: "./src"` with `"@/*": ["*"]` and `baseUrl: "."` with `"@/*": ["./src/*"]`
+  both produce `@/components/panel`.
+  A `baseUrl` inherited through `extends` stays anchored to the config file that
+  declared it.
+  When `paths` is set without a `baseUrl`, targets resolve against the directory of
+  the tsconfig that declared them, matching TypeScript 4.1 and later.
+- When several aliases match, the most specific one wins.
+- An import that no alias covers is left relative, since an alias the compiler
+  cannot resolve would break the build.
+  If the tsconfig defines no `paths` at all, `tsmv` falls back to mapping the
+  `baseUrl` directory to the `--alias-prefix` (default `@`).
 - Files under `node_modules`, `dist`, `build`, `.next`, `.git`, and `target` are
   skipped.
 - Bare specifiers (`react`, `lodash`, …) and already-absolute imports are left

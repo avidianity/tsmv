@@ -28,11 +28,43 @@ pub struct ResolvedTsConfig {
 pub struct CompilerOptions {
     pub base_url: Option<String>,
     pub paths: Option<HashMap<String, Vec<String>>>,
+    /// Absolute directory `baseUrl` points at.
+    ///
+    /// TypeScript resolves relative paths against the config file they
+    /// originate in, so an inherited `baseUrl` stays anchored to the config
+    /// that declared it rather than the one that extends it.
+    base_url_dir: Option<PathBuf>,
+    /// Directory of the config file that declared `paths`.
+    paths_dir: Option<PathBuf>,
+}
+
+impl CompilerOptions {
+    /// The absolute directory `paths` targets are resolved against.
+    ///
+    /// That is `baseUrl` when set; otherwise the directory of the config that
+    /// declared `paths`, matching TypeScript 4.1+ where `paths` no longer
+    /// requires `baseUrl`.
+    pub fn alias_base_dir(&self) -> Option<&Path> {
+        self.base_url_dir.as_deref().or(self.paths_dir.as_deref())
+    }
 }
 
 /// Parse and resolve a tsconfig with its extends chain (max depth 10).
 pub fn parse_tsconfig(path: &Path) -> anyhow::Result<ResolvedTsConfig> {
-    resolve_tsconfig(path, 0)
+    resolve_tsconfig(&absolutize(path), 0)
+}
+
+/// Make a path absolute without canonicalizing it, so it stays comparable with
+/// the (also uncanonicalized) file paths the mover works with.
+fn absolutize(path: &Path) -> PathBuf {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    crate::core::import_path::normalize_path(&joined)
 }
 
 fn resolve_tsconfig(path: &Path, depth: usize) -> anyhow::Result<ResolvedTsConfig> {
@@ -75,14 +107,19 @@ fn resolve_tsconfig(path: &Path, depth: usize) -> anyhow::Result<ResolvedTsConfi
         None
     };
 
-    merge_configs(parent, raw)
+    merge_configs(parent, raw, path.parent().unwrap_or(Path::new(".")))
 }
 
 /// Merge parent and child configs. Child values override parent.
-fn merge_configs(parent: Option<ResolvedTsConfig>, child: TsConfigRaw) -> anyhow::Result<ResolvedTsConfig> {
+fn merge_configs(
+    parent: Option<ResolvedTsConfig>,
+    child: TsConfigRaw,
+    config_dir: &Path,
+) -> anyhow::Result<ResolvedTsConfig> {
     let compiler_options = merge_compiler_options(
         parent.as_ref().and_then(|p| p.compiler_options.as_ref()),
         &child.compiler_options,
+        config_dir,
     );
 
     // include: child overrides parent if child defines it
@@ -111,37 +148,59 @@ fn merge_configs(parent: Option<ResolvedTsConfig>, child: TsConfigRaw) -> anyhow
 fn merge_compiler_options(
     parent: Option<&CompilerOptions>,
     child_value: &Option<serde_json::Value>,
+    config_dir: &Path,
 ) -> Option<CompilerOptions> {
     match (parent, child_value) {
         (None, None) => None,
         (Some(p), None) => Some(p.clone()),
-        (None, Some(v)) => Some(parse_compiler_options(v)),
+        (None, Some(v)) => Some(parse_compiler_options(v, config_dir)),
         (Some(p), Some(v)) => {
-            let child = parse_compiler_options(v);
+            let child = parse_compiler_options(v, config_dir);
+            let child_has_paths = child.paths.is_some();
             Some(CompilerOptions {
-                base_url: child.base_url.or(p.base_url.clone()),
+                base_url: child.base_url.or_else(|| p.base_url.clone()),
                 // paths: child overrides parent entirely (TypeScript doesn't deep-merge paths)
-                paths: child.paths.or(p.paths.clone()),
+                paths: child.paths.or_else(|| p.paths.clone()),
+                base_url_dir: child.base_url_dir.or_else(|| p.base_url_dir.clone()),
+                // The anchor travels with whichever config supplied `paths`.
+                paths_dir: if child_has_paths {
+                    child.paths_dir
+                } else {
+                    p.paths_dir.clone()
+                },
             })
         }
     }
 }
 
-fn parse_compiler_options(value: &serde_json::Value) -> CompilerOptions {
+fn parse_compiler_options(value: &serde_json::Value, config_dir: &Path) -> CompilerOptions {
+    let base_url = value
+        .get("baseUrl")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let paths = value
+        .get("paths")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .map(|(k, v)| {
+                    let vals = v
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    (k.clone(), vals)
+                })
+                .collect()
+        });
+
     CompilerOptions {
-        base_url: value.get("baseUrl").and_then(|v| v.as_str()).map(String::from),
-        paths: value.get("paths")
-            .and_then(|v| v.as_object())
-            .map(|obj| {
-                obj.iter()
-                    .map(|(k, v)| {
-                        let vals = v.as_array()
-                            .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
-                            .unwrap_or_default();
-                        (k.clone(), vals)
-                    })
-                    .collect()
-            }),
+        base_url_dir: base_url
+            .as_ref()
+            .map(|b| crate::core::import_path::normalize_path(&config_dir.join(b))),
+        paths_dir: paths.as_ref().map(|_| config_dir.to_path_buf()),
+        base_url,
+        paths,
     }
 }
 

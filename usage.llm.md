@@ -55,7 +55,10 @@ All flags are global (valid before or after a subcommand).
 - Circular dependency among moved files ⇒ advisory STDERR warning only; move still succeeds.
 - `--absolute-imports` (default) + tsconfig found ⇒ rewrites relative imports across the
   ENTIRE project (every .ts/.tsx/.js/.jsx, skipping node_modules,dist,build,.next,.git,target),
-  using tsconfig `baseUrl`/`paths`, falling back to mapping `src/` → `<alias-prefix>`.
+  using tsconfig `baseUrl`/`paths`. `paths` targets resolve against `baseUrl` (TS semantics);
+  with no `baseUrl`, against the declaring tsconfig's directory. Most specific alias wins.
+  No `paths` at all ⇒ falls back to mapping the `baseUrl` dir → `<alias-prefix>`.
+- Imports not covered by any alias stay relative (never emit an unresolvable alias).
 - `--absolute-imports` with NO tsconfig found ⇒ conversion silently skipped.
 - Bare specifiers (`react`, `lodash`) and already-absolute imports are never modified.
 
