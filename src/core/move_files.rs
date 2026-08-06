@@ -210,28 +210,21 @@ pub fn move_files(
 }
 
 /// Check which destination files already exist (for interactive confirmation).
+///
+/// Derived from the real planner so the prompt always reflects the destinations
+/// the move will actually write, including single-file renames.
 fn check_destinations_exist(
     sources: &[PathBuf],
     destination: &Path,
     source_dir_root: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut existing = Vec::new();
-    for source in sources {
-        let file_name = source.file_name().unwrap_or_default();
-        let dest = if let Some(root) = source_dir_root {
-            if let Ok(rel) = source.strip_prefix(root) {
-                destination.join(rel)
-            } else {
-                destination.join(file_name)
-            }
-        } else {
-            destination.join(file_name)
-        };
-        if dest.exists() {
-            existing.push(dest);
-        }
-    }
-    existing
+    plan_file_operations(sources, destination, source_dir_root)
+        .into_iter()
+        .filter_map(|op| match op {
+            FileOperation::Move { dest, .. } if dest.exists() => Some(dest),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Prompt user for confirmation before overwriting. Returns true if confirmed.
